@@ -5,16 +5,16 @@ Content     :   Implementation of HIDDevice.
 Created     :   March 7, 2013
 Authors     :   Lee Cooper
 
-Copyright   :   Copyright 2014 Oculus VR, Inc. All Rights reserved.
+Copyright   :   Copyright 2013 Oculus VR, Inc. All Rights reserved.
 
-Licensed under the Oculus VR Rift SDK License Version 3.1 (the "License"); 
-you may not use the Oculus VR Rift SDK except in compliance with the License, 
+Licensed under the Oculus VR SDK License Version 2.0 (the "License"); 
+you may not use the Oculus VR SDK except in compliance with the License, 
 which is provided at the time of installation or download, or which 
 otherwise accompanies this software in either electronic or hard copy form.
 
 You may obtain a copy of the License at
 
-http://www.oculusvr.com/licenses/LICENSE-3.1 
+http://www.oculusvr.com/licenses/LICENSE-2.0 
 
 Unless required by applicable law or agreed to in writing, the Oculus VR SDK 
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -66,21 +66,26 @@ public:
         MessageType handlerMessageType;
         switch (messageType) {
             case HIDDeviceMessage_DeviceAdded:
-                handlerMessageType           = Message_DeviceAdded;
-                DeviceImpl<B>::ConnectedFlag = true;
+                handlerMessageType = Message_DeviceAdded;
                 break;
 
             case HIDDeviceMessage_DeviceRemoved:
-                handlerMessageType           = Message_DeviceRemoved;
-                DeviceImpl<B>::ConnectedFlag = false;
+                handlerMessageType = Message_DeviceRemoved;
                 break;
 
             default: OVR_ASSERT(0); return;
         }
 
         // Do device notification.
-        MessageDeviceStatus status(handlerMessageType, this, OVR::DeviceHandle(this->pCreateDesc));
-        this->HandlerRef.Call(status);
+        {
+            Lock::Locker scopeLock(this->HandlerRef.GetLock());
+
+            if (this->HandlerRef.GetHandler())
+            {
+                MessageDeviceStatus status(handlerMessageType, this, OVR::DeviceHandle(this->pCreateDesc));
+                this->HandlerRef.GetHandler()->OnMessage(status);
+            }
+        }
 
         // Do device manager notification.
         DeviceManagerImpl*   manager = this->GetManagerImpl();
@@ -123,6 +128,9 @@ public:
     {   
         InternalDevice->SetHandler(NULL);
 
+        // Remove the handler, if any.
+        this->HandlerRef.SetHandler(0);
+
         DeviceImpl<B>::pParent.Clear();
     }
 
@@ -136,21 +144,37 @@ public:
         return DeviceImpl<B>::pCreateDesc->GetManagerImpl()->GetHIDDeviceManager();
     }
 
+
+    struct WriteData
+    {
+        enum { BufferSize = 64 };
+        UByte Buffer[64];
+        UPInt Size;
+
+        WriteData(UByte* data, UPInt size) : Size(size)
+        {
+            OVR_ASSERT(size <= BufferSize);
+            memcpy(Buffer, data, size);
+        }
+    };
+
     bool SetFeatureReport(UByte* data, UInt32 length)
     { 
+        WriteData writeData(data, length);
+
         // Push call with wait.
         bool result = false;
 
 		ThreadCommandQueue* pQueue = this->GetManagerImpl()->GetThreadQueue();
-        if (!pQueue->PushCallAndWaitResult(this, &HIDDeviceImpl::setFeatureReport, &result, data, length))
+        if (!pQueue->PushCallAndWaitResult(this, &HIDDeviceImpl::setFeatureReport, &result, writeData))
             return false;
 
         return result;
     }
 
-    bool setFeatureReport(UByte* data, UInt32 length)
+    bool setFeatureReport(const WriteData& data)
     {
-        return InternalDevice->SetFeatureReport(data, length);
+        return InternalDevice->SetFeatureReport((UByte*) data.Buffer, (UInt32) data.Size);
     }
 
     bool GetFeatureReport(UByte* data, UInt32 length)
@@ -168,17 +192,6 @@ public:
     {
         return InternalDevice->GetFeatureReport(data, length);
     }
-
-	UByte GetDeviceInterfaceVersion()
-	{
-		UInt16 versionNumber = getHIDDesc()->VersionNumber;
-
-		// Our interface and hardware versions are represented as two BCD digits each.
-		// Interface version is in the last two digits.
-		UByte interfaceVersion = (UByte)	((versionNumber & 0x000F) >> 0) * 1 +
-											((versionNumber & 0x00F0) >> 4) * 10;
-		return interfaceVersion;
-	}
 
 protected:
     HIDDevice* GetInternalDevice() const

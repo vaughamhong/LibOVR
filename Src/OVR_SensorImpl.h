@@ -5,16 +5,16 @@ Content     :   Sensor device specific implementation.
 Created     :   March 7, 2013
 Authors     :   Lee Cooper
 
-Copyright   :   Copyright 2014 Oculus VR, Inc. All Rights reserved.
+Copyright   :   Copyright 2013 Oculus VR, Inc. All Rights reserved.
 
-Licensed under the Oculus VR Rift SDK License Version 3.1 (the "License"); 
-you may not use the Oculus VR Rift SDK except in compliance with the License, 
+Licensed under the Oculus VR SDK License Version 2.0 (the "License"); 
+you may not use the Oculus VR SDK except in compliance with the License, 
 which is provided at the time of installation or download, or which 
 otherwise accompanies this software in either electronic or hard copy form.
 
 You may obtain a copy of the License at
 
-http://www.oculusvr.com/licenses/LICENSE-3.1 
+http://www.oculusvr.com/licenses/LICENSE-2.0 
 
 Unless required by applicable law or agreed to in writing, the Oculus VR SDK 
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,14 +28,9 @@ limitations under the License.
 #define OVR_SensorImpl_h
 
 #include "OVR_HIDDeviceImpl.h"
-#include "OVR_SensorTimeFilter.h"
-
-#ifdef OVR_OS_ANDROID
-#include "OVR_PhoneSensors.h"
-#endif
 
 namespace OVR {
-
+    
 struct TrackerMessage;
 class ExternalVisitor;
 
@@ -155,29 +150,25 @@ struct SensorDisplayInfoImpl
     {
         Mask_BaseFmt    = 0x0f,
         Mask_OptionFmts = 0xf0,
-        Base_None       = 0,
-        Base_ScreenOnly = 1,
-        Base_Distortion = 2,
+        Base_None       = 0x00,
+        Base_Screen     = 0x01,
+        Base_Distortion = 0x02,
     };
 
     UInt16  CommandId;
-
     UByte   DistortionType;    
     UInt16  HResolution, VResolution;
     float   HScreenSize, VScreenSize;
     float   VCenter;
     float   LensSeparation;
-    // Currently these values are not well-measured.
-    float   OutsideLensSurfaceToScreen[2];
-    // TODO: add DistortionEqn
-    // TODO: currently these values are all zeros and the
-    //       distortion is hard-coded in HMDDeviceCreateDesc::GetDeviceInfo()
+    float   EyeToScreenDistance[2];
     float   DistortionK[6];
 
     SensorDisplayInfoImpl();
 
     void Unpack();
 };
+
 
 //-------------------------------------------------------------------------------------
 // ***** OVR::SensorDeviceImpl
@@ -195,11 +186,11 @@ public:
     virtual bool Initialize(DeviceBase* parent);
     virtual void Shutdown();
     
-    virtual void AddMessageHandler(MessageHandler* handler);
+    virtual void SetMessageHandler(MessageHandler* handler);
 
     // HIDDevice::Notifier interface.
     virtual void OnInputReport(UByte* pData, UInt32 length);
-    virtual double OnTicks(double tickSeconds);
+    virtual UInt64 OnTicks(UInt64 ticksMks);
 
     // HMD-Mounted sensor has a different coordinate frame.
     virtual void SetCoordinateFrame(CoordinateFrame coordframe);    
@@ -208,11 +199,6 @@ public:
     // SensorDevice interface
     virtual bool SetRange(const SensorRange& range, bool waitFlag);
     virtual void GetRange(SensorRange* range) const;
-
-    virtual void GetFactoryCalibration(Vector3f* AccelOffset, Vector3f* GyroOffset,
-                                       Matrix4f* AccelMatrix, Matrix4f* GyroMatrix, 
-                                       float* Temperature);
-    virtual void SetOnboardCalibrationEnabled(bool enabled);
 
     // Sets report rate (in Hz) of MessageBodyFrame messages (delivered through MessageHandler::OnMessage call). 
     // Currently supported maximum rate is 1000Hz. If the rate is set to 500 or 333 Hz then OnMessage will be 
@@ -227,28 +213,20 @@ public:
     virtual unsigned    GetReportRate() const;
 
     // Hack to create HMD device from sensor display info.
-    static void         EnumerateHMDFromSensorDisplayInfo(const SensorDisplayInfoImpl& displayInfo, 
-                                                                DeviceFactory::EnumerateVisitor& visitor);
-
-    // These methods actually store data in a JSON file
-    virtual bool		SetMagCalibrationReport(const MagCalibrationReport& data);
-	virtual bool		GetMagCalibrationReport(MagCalibrationReport* data);
-
+    static void EnumerateHMDFromSensorDisplayInfo(const SensorDisplayInfoImpl& displayInfo, 
+                                                  DeviceFactory::EnumerateVisitor& visitor);
 protected:
 
-    virtual void    openDevice();
-    void            closeDeviceOnError();
+    void openDevice();
+    void closeDeviceOnError();
 
-    Void            setCoordinateFrame(CoordinateFrame coordframe);
-    bool            setRange(const SensorRange& range);
+    Void    setCoordinateFrame(CoordinateFrame coordframe);
+    bool    setRange(const SensorRange& range);
 
-    Void            setReportRate(unsigned rateHz);
-
-    Void            setOnboardCalibrationEnabled(bool enabled);
+    Void    setReportRate(unsigned rateHz);
 
     // Called for decoded messages
-    void			onTrackerMessage(TrackerMessage* message);
-	bool			decodeTrackerMessage(TrackerMessage* message, UByte* buffer, int size);
+    void        onTrackerMessage(TrackerMessage* message);
 
     // Helpers to reduce casting.
 /*
@@ -264,45 +242,23 @@ protected:
     // so we track its state.
     CoordinateFrame Coordinates;
     CoordinateFrame HWCoordinates;
-    double      NextKeepAliveTickSeconds;
+    UInt64      NextKeepAliveTicks;
 
     bool        SequenceValid;
-    UInt16      LastTimestamp;
+    SInt16      LastTimestamp;
     UByte       LastSampleCount;
     float       LastTemperature;
     Vector3f    LastAcceleration;
     Vector3f    LastRotationRate;
     Vector3f    LastMagneticField;
 
-    // This tracks wrap around, and should be monotonically increasing.
-    UInt32		FullTimestamp;
-
     // Current sensor range obtained from device. 
     SensorRange MaxValidRange;
     SensorRange CurrentRange;
-
-    // IMU calibration obtained from device.
-    Vector3f    AccelCalibrationOffset;
-    Vector3f    GyroCalibrationOffset;
-    Matrix4f    AccelCalibrationMatrix;
-    Matrix4f    GyroCalibrationMatrix;
-    float       CalibrationTemperature;
     
     UInt16      OldCommandId;
-
-    SensorTimeFilter TimeFilter;
-    double           PrevAbsoluteTime;
-
-#ifdef OVR_OS_ANDROID
-    void 	        replaceWithPhoneMag(Vector3f* val);
-
-    PhoneSensors* 	pPhoneSensors;
-#endif
-
-private:
-    Matrix4f    magCalibration;
-    bool        magCalibrated;
 };
+
 
 } // namespace OVR
 
